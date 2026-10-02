@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StudyBloom</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🌸 StudyBloom</h1>
+    <p>Your AI-powered study buddy</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>🤖 AI Tutor</h2>
+      <textarea id="tutorInput" placeholder="Ask your study question..."></textarea>
+      <button onclick="askTutor()">Ask Tutor</button>
+      <div id="tutorOutput" class="output"></div>
+    </section>
+
+    <section class="card">
+      <h2>📅 AI Study Planner</h2>
+      <textarea id="notesInput" placeholder="Paste your notes here..."></textarea>
+      <label>Exam Date</label>
+      <input type="date" id="examDate">
+      <label>Study Time per Day (minutes)</label>
+      <input type="number" id="studyMinutes" value="60" min="15" max="720">
+      <button onclick="generatePlan()">Generate My Study Plan</button>
+      <div id="planOutput" class="output"></div>
+    </section>
+
+    <section class="card">
+      <h2>📝 Quiz Zone</h2>
+      <textarea id="quizNotes" placeholder="Paste your notes for the quiz..."></textarea>
+      <label>Number of Questions</label>
+      <select id="quizCount">
+        <option value="5">5</option>
+        <option value="10" selected>10</option>
+        <option value="15">15</option>
+      </select>
+      <label>Difficulty</label>
+      <select id="quizDifficulty">
+        <option value="easy">Easy</option>
+        <option value="medium" selected>Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+      <button onclick="generateQuiz()">Generate Quiz</button>
+      <div id="quizOutput" class="output"></div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
