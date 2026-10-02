@@ -1,25 +1,47 @@
+require("dotenv").config();
 const express = require("express");
+const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
-app.use(express.json({limit: "4mb"}));
+
+app.use(express.json({ limit: "4mb" }));
 app.use(express.static(__dirname));
 
-async function askOllama(messages, options = {}) {
-  const response = await fetch("http://localhost:11434/api/chat", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      model: "llama3.2",
-      messages,
-      stream: false,
-      ...options
-    })
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
+
+const MODEL = "gemini-3.8-flash";
+
+async function askGemini(messages, options = {}) {
+  const systemMessage =
+    messages.find(m => m.role === "system")?.content || "";
+
+  const userMessages = messages
+    .filter(m => m.role !== "system")
+    .map(m => m.content)
+    .join("\n\n");
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: userMessages,
+    config: {
+      systemInstruction: systemMessage,
+      temperature: options.temperature ?? 0.7,
+      maxOutputTokens: options.maxOutputTokens ?? 5000,
+      ...(options.json
+        ? {
+            responseMimeType: "application/json"
+          }
+        : {})
+    }
   });
 
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Ollama request failed.");
-  if (!data.message?.content) throw new Error("The local AI returned an empty response.");
-  return data.message.content;
+  if (!response.text) {
+    throw new Error("Gemini returned an empty response.");
+  }
+
+  return response.text;
 }
 
 function cleanJson(raw) {
@@ -30,21 +52,48 @@ function cleanJson(raw) {
     .trim();
 }
 
+
+// =========================
+// AI TUTOR
+// =========================
+
 app.post("/api/ask", async (req, res) => {
   try {
     const question = String(req.body.question || "").trim();
-    if (!question) return res.status(400).json({error: "Question is required."});
 
-    const answer = await askOllama([
-      {role: "system", content: "You are StudyBloom, a friendly AI tutor. Explain clearly for a college student. Keep answers simple and useful."},
-      {role: "user", content: question}
+    if (!question) {
+      return res.status(400).json({
+        error: "Question is required."
+      });
+    }
+
+    const answer = await askGemini([
+      {
+        role: "system",
+        content:
+          "You are StudyBloom, a friendly AI tutor. Explain clearly for a college student. Keep answers simple and useful."
+      },
+      {
+        role: "user",
+        content: question
+      }
     ]);
 
-    res.json({answer});
+    res.json({ answer });
+
   } catch (err) {
-    res.status(500).json({error: err.message});
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message || "AI tutor failed."
+    });
   }
 });
+
+
+// =========================
+// AI STUDY PLANNER
+// =========================
 
 app.post("/api/plan", async (req, res) => {
   try {
@@ -52,8 +101,17 @@ app.post("/api/plan", async (req, res) => {
     const examDate = String(req.body.examDate || "").trim();
     const studyMinutes = Number(req.body.studyMinutes || 60);
 
-    if (!notes) return res.status(400).json({error: "Notes are required."});
-    if (!examDate) return res.status(400).json({error: "Exam date is required."});
+    if (!notes) {
+      return res.status(400).json({
+        error: "Notes are required."
+      });
+    }
+
+    if (!examDate) {
+      return res.status(400).json({
+        error: "Exam date is required."
+      });
+    }
 
     const prompt = `Create a realistic study plan from ONLY the supplied notes.
 
@@ -61,6 +119,7 @@ Exam date: ${examDate}
 Study time per day: ${studyMinutes} minutes
 
 Return ONLY valid JSON:
+
 {
   "title": "...",
   "goal": "...",
@@ -85,33 +144,70 @@ Rules:
 NOTES:
 ${notes}`;
 
-    const raw = await askOllama([
-      {role: "system", content: "You create structured study plans. Return JSON only."},
-      {role: "user", content: prompt}
-    ]);
+    const raw = await askGemini([
+      {
+        role: "system",
+        content:
+          "You create structured study plans. Return JSON only."
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ], {
+      json: true,
+      temperature: 0.3,
+      maxOutputTokens: 4000
+    });
 
     const plan = JSON.parse(cleanJson(raw));
+
     res.json(plan);
+
   } catch (err) {
-    res.status(500).json({error: err.message || "Could not create study plan."});
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message || "Could not create study plan."
+    });
   }
 });
+
+
+// =========================
+// QUIZ GENERATOR
+// =========================
 
 app.post("/api/quiz", async (req, res) => {
   try {
     const notes = String(req.body.notes || "").trim();
-    const count = Math.min(Math.max(Number(req.body.count || 10), 5), 15);
-    const difficulty = String(req.body.difficulty || "medium");
 
-    if (!notes) return res.status(400).json({error: "Notes are required."});
+    const count = Math.min(
+      Math.max(Number(req.body.count || 10), 5),
+      15
+    );
+
+    const difficulty = String(
+      req.body.difficulty || "medium"
+    );
+
+    if (!notes) {
+      return res.status(400).json({
+        error: "Notes are required."
+      });
+    }
 
     const makePrompt = (retry = false) => `Create a multiple-choice quiz using ONLY the information in these notes.
 
 Number of questions: ${count}
 Difficulty: ${difficulty}
-${retry ? `IMPORTANT: Your previous response did not contain exactly ${count} questions. This time you MUST return exactly ${count} questions. Count them carefully before responding.` : ""}
+
+${retry
+  ? `IMPORTANT: Your previous response did not contain exactly ${count} questions. This time you MUST return exactly ${count} questions. Count them carefully before responding.`
+  : ""}
 
 Return ONLY valid JSON in exactly this structure:
+
 {
   "title": "StudyBloom Quiz",
   "instructions": "Choose the best answer.",
@@ -126,7 +222,7 @@ Return ONLY valid JSON in exactly this structure:
 }
 
 Rules:
-- The questions array MUST contain exactly ${count} questions — no more and no fewer.
+- The questions array MUST contain exactly ${count} questions.
 - Exactly 4 options for every question.
 - Exactly one correct answer for every question.
 - answerIndex must be 0, 1, 2, or 3.
@@ -140,44 +236,86 @@ NOTES:
 ${notes}`;
 
     async function generateQuizOnce(retry = false) {
-      const raw = await askOllama([
-        {role: "system", content: "You generate MCQ quizzes. Output ONLY valid JSON. Follow the requested question count exactly."},
-        {role: "user", content: makePrompt(retry)}
+
+      const raw = await askGemini([
+        {
+          role: "system",
+          content:
+            "You generate MCQ quizzes. Output ONLY valid JSON. Follow the requested question count exactly."
+        },
+        {
+          role: "user",
+          content: makePrompt(retry)
+        }
       ], {
-        format: "json",
-        options: {temperature: 0.1, num_predict: 5000}
+        json: true,
+        temperature: 0.1,
+        maxOutputTokens: 6000
       });
 
-      const quiz = JSON.parse(cleanJson(raw));
-      return quiz;
+      return JSON.parse(cleanJson(raw));
     }
 
     let quiz = await generateQuizOnce(false);
 
-    // Llama can occasionally stop early. Give it one automatic correction attempt.
-    if (!Array.isArray(quiz.questions) || quiz.questions.length !== count) {
+    // Automatic correction attempt
+    if (
+      !Array.isArray(quiz.questions) ||
+      quiz.questions.length !== count
+    ) {
       quiz = await generateQuizOnce(true);
     }
 
-    if (!Array.isArray(quiz.questions) || quiz.questions.length !== count) {
-      throw new Error(`The AI returned ${Array.isArray(quiz.questions) ? quiz.questions.length : 0} questions instead of ${count}. Please click Generate Quiz again.`);
+    if (
+      !Array.isArray(quiz.questions) ||
+      quiz.questions.length !== count
+    ) {
+      throw new Error(
+        `The AI returned ${
+          Array.isArray(quiz.questions)
+            ? quiz.questions.length
+            : 0
+        } questions instead of ${count}. Please click Generate Quiz again.`
+      );
     }
 
     quiz.questions.forEach((q, index) => {
-      if (!q.question || !Array.isArray(q.options) || q.options.length !== 4) {
-        throw new Error(`Question ${index + 1} is incomplete. Please generate the quiz again.`);
+
+      if (
+        !q.question ||
+        !Array.isArray(q.options) ||
+        q.options.length !== 4
+      ) {
+        throw new Error(
+          `Question ${index + 1} is incomplete. Please generate the quiz again.`
+        );
       }
-      if (![0,1,2,3].includes(q.answerIndex)) {
-        throw new Error(`Question ${index + 1} has an invalid answer. Please generate the quiz again.`);
+
+      if (![0, 1, 2, 3].includes(q.answerIndex)) {
+        throw new Error(
+          `Question ${index + 1} has an invalid answer. Please generate the quiz again.`
+        );
       }
     });
 
     res.json(quiz);
+
   } catch (err) {
-    res.status(500).json({error: err.message || "Could not create quiz."});
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message || "Could not create quiz."
+    });
   }
 });
 
-app.listen(3000, () => {
-  console.log("StudyBloom is running at http://localhost:3000");
-});
+
+// =========================
+// START SERVER
+// =========================
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`StudyBloom is running on port ${PORT}`);
+});require("dotenv").config();
